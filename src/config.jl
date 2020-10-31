@@ -34,6 +34,15 @@ struct Config{
     IS_A_COL_MAJOR,
     IS_B_COL_MAJOR
    }
+    global_a_layout::GLOBAL_A_LAYOUT
+    global_b_layout::GLOBAL_B_LAYOUT
+    global_c_layout::GLOBAL_C_LAYOUT
+    global_d_layout::GLOBAL_D_LAYOUT
+
+    shared_a_layout::SHARED_A_LAYOUT
+    shared_b_layout::SHARED_B_LAYOUT
+    shared_c_layout::SHARED_C_LAYOUT
+    shared_d_layout::SHARED_D_LAYOUT
 end
 
 @inline function Base.getproperty(conf::Type{Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
@@ -91,6 +100,14 @@ end
     # fallback
     else
         getfield(conf, sym)
+    end
+end
+
+@inline function Base.getproperty(conf::Config{MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}, sym::Symbol) where {MATMUL_SHAPE, BLOCK_SHAPE, WARPS_PER_BLOCK, MEM_A_WARP, MEM_A_THREAD, MEM_B_WARP, MEM_B_THREAD, MEM_CD_WARP, MEM_CD_THREAD, COMPUTE_WARP, COMPUTE_OP_SHAPE, GLOBAL_A_LAYOUT, GLOBAL_B_LAYOUT, GLOBAL_C_LAYOUT, GLOBAL_D_LAYOUT, SHARED_A_LAYOUT, SHARED_B_LAYOUT, SHARED_C_LAYOUT, SHARED_D_LAYOUT, OPERATOR, IS_A_COL_MAJOR, IS_B_COL_MAJOR}
+    if sym == :launch_args
+        return (threads = WARPS_PER_BLOCK * 32, blocks = (MATMUL_SHAPE.M ÷ BLOCK_SHAPE.M, MATMUL_SHAPE.N ÷ BLOCK_SHAPE.N), shmem = 64 * 1024)
+    else
+        return getfield(conf, sym)
     end
 end
 
@@ -159,9 +176,9 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     # Get the shared layouts for A, B, C, D.
     # For A & B, add padding to reduce bank conflicts, but preserve 128-bit (16 byte) alignment.
     shared_a_layout = get(params, :shared_a_layout,
-                          Layout.Padded{global_a_layout, 16 ÷ sizeof(Layout.eltype(global_a_layout))})
+                          Layout.Padded{typeof(global_a_layout), 16 ÷ sizeof(Layout.eltype(global_a_layout))}())
     shared_b_layout = get(params, :shared_b_layout,
-                          Layout.Padded{global_b_layout, 16 ÷ sizeof(Layout.eltype(global_b_layout))})
+                          Layout.Padded{typeof(global_b_layout), 16 ÷ sizeof(Layout.eltype(global_b_layout))}())
     shared_c_layout = get(params, :shared_c_layout, global_c_layout)
     shared_d_layout = get(params, :shared_d_layout, global_d_layout)
 
@@ -199,6 +216,8 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
     mem_cd_thread = get(params, :mem_cd_thread,
         adjacent_elements(16 ÷ sizeof(Layout.eltype(global_c_layout)), (M = block_shape.M, N = block_shape.N), is_cd_col_major))
 
+    @info "" gemm_shape block_shape warps_per_block mem_a_warp mem_a_thread mem_b_warp mem_b_thread mem_cd_warp mem_cd_thread compute_warp op_shape
+
     return Config{
         #= Params =#
         gemm_shape,
@@ -214,15 +233,15 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         op_shape,
 
         #= Layouts =#
-        global_a_layout,
-        global_b_layout,
-        global_c_layout,
-        global_d_layout,
+        typeof(global_a_layout),
+        typeof(global_b_layout),
+        typeof(global_c_layout),
+        typeof(global_d_layout),
 
-        shared_a_layout,
-        shared_b_layout,
-        shared_c_layout,
-        shared_d_layout,
+        typeof(shared_a_layout),
+        typeof(shared_b_layout),
+        typeof(shared_c_layout),
+        typeof(shared_d_layout),
 
         #= Operators =#
         operator,
@@ -230,5 +249,15 @@ function get_config(; gemm_shape, operator, global_a_layout, global_c_layout, kw
         #= Is A & B Col Major? =#
         is_a_col_major,
         is_b_col_major,
-    }
+       }(
+         global_a_layout,
+         global_b_layout,
+         global_c_layout,
+         global_d_layout,
+         
+         shared_a_layout,
+         shared_b_layout,
+         shared_c_layout,
+         shared_d_layout,
+        )
 end

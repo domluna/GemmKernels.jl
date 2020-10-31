@@ -2,6 +2,7 @@ export Layout
 module Layout
 
 using CUDA
+# using KernelAbstractions.Extras: @unroll
 using GPUifyLoops: @unroll
 using GemmKernels.Tiling
 using StaticArrays
@@ -42,8 +43,13 @@ end
 
 abstract type LayoutBase{T} end
 
-@inline eltype(::Type{<:LayoutBase{T}}) where {T} = T
-@inline physical_size(::Type{<:LayoutBase{T}}, logical_size::NamedTuple) where {T} = Tuple(logical_size)
+abstract type StaticLayout{T} <: LayoutBase{T} end
+abstract type DynamicLayout{T} <: LayoutBase{T} end
+
+@inline eltype(::L) where {T, L<:(LayoutBase{T})} = T
+@inline eltype(::Type{<:LayoutBase{T}}) where T = T
+@inline physical_size(::Type{<:LayoutBase{T}}, logical_size::NamedTuple) where T = Tuple(logical_size)
+@inline physical_size(::L, logical_size::NamedTuple) where {T, L<:(LayoutBase{T})} = Tuple(logical_size)
 
 # --------------
 # Padded layouts
@@ -51,14 +57,24 @@ abstract type LayoutBase{T} end
 
 struct Padded{L, P} end
 
+@inline function pad_logical_coord(::Padded{L, P}, crd::NamedTuple) where {L, P}
+    t = Tuple(crd)
+    return typeof(crd)((Base.first(t) + P, Base.tail(t)...))
+end
 @inline function pad_logical_coord(::Type{Padded{L, P}}, crd::NamedTuple) where {L, P}
     t = Tuple(crd)
     return typeof(crd)((Base.first(t) + P, Base.tail(t)...))
 end
 
+@inline eltype(::Padded{L, P}) where {L, P} = eltype(L())
 @inline eltype(::Type{Padded{L, P}}) where {L, P} = eltype(L)
+
+@inline physical_size(p::Padded{L, P}, logical_size::NamedTuple) where {L, P} = physical_size(L, pad_logical_coord(p, logical_size))
 @inline physical_size(::Type{Padded{L, P}}, logical_size::NamedTuple) where {L, P} = physical_size(L, pad_logical_coord(Padded{L, P}, logical_size))
+
+@inline load(::Padded{L, P}, workspace, tile::Tile, logical_size::NamedTuple) where {L, P} = load(L, workspace, tile)
 @inline load(::Type{Padded{L, P}}, workspace, tile::Tile, logical_size::NamedTuple) where {L, P} = load(L, workspace, tile)
+
 @inline store!(::Type{Padded{L, P}}, workspace, value, tile::Tile) where {L, P} = store!(L, workspace, value, tile::Tile)
 
 # ---------------
@@ -67,9 +83,12 @@ end
 
 struct AlignedColMajor{T} <: LayoutBase{T} end
 
+@inline physical_size(::Padded{AlignedColMajor{T}, P}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 @inline physical_size(::Type{Padded{AlignedColMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[1] + P, logical_size[2])
 
 @inline fragtype(::Type{AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{8, VecElement{Float16}}
+# @inline fragtype(::AlignedColMajor{T}, tile_size::NamedTuple) where {T} = NTuple{4, VecElement{Float32}}
+# @inline fragtype(::Type{AlignedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{4, VecElement{Float32}}
 
 @inline function load(::Type{AlignedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
@@ -98,13 +117,22 @@ struct Diagonal{T} <: LayoutBase{T} end
 @inline function load(::Type{Diagonal{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
 
+    linear_base = linearise(tile.base, Base.size(workspace))
+    linear_offset = linearise(tile.offset, Base.size(workspace))
+
+    return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
     # The row index is given by t.index[1] + (k - 1), the column index is given by t.index[2] (0-based).
     # Only load on the diagonal, i.e. if row and column are equal.
     # Note that t.index[2] is 0-based, so we need to add 1 before loading from workspace.
     return ntuple(k -> VecElement{Float16}(tile.index[1] + k - 1 == tile.index[2] ? @inbounds(workspace[tile.index[2] + 1]) : 0), Val(8))
 end
 
-@inline threadblock_condition(layout_a::Type{Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
+# @inline threadblock_condition(layout_a::Diagonal{T}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
+# @inline threadblock_condition(layout_a::Type{Diagonal{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = abs(block_i - block_k) <= block_tile.size.K
+
+@inline function threadblock_condition(layout_a::Diagonal{T}, layout_b, block_i, block_j, block_k, block_tile) where {T}
+    block_i == block_k || block_i + block_tile.size.K == block_k
+end
 
 # ---------------
 # AlignedRowMajor
@@ -112,9 +140,10 @@ end
 
 struct AlignedRowMajor{T} <: LayoutBase{T} end
 
-@inline physical_size(::Type{Padded{AlignedRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
+@inline physical_size(::Padded{AlignedRowMajor{T}, P}, logical_size::NamedTuple) where {T, P} = (logical_size[2] + P, logical_size[1])
 
 @inline fragtype(::Type{AlignedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{8, VecElement{Float16}}
+# @inline fragtype(::AlignedRowMajor{T}, tile_size::NamedTuple) where {T} = NTuple{4, VecElement{Float32}}
 
 @inline function load(::Type{AlignedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     N = 16 ÷ sizeof(T)
@@ -140,7 +169,7 @@ end
 
 struct InterleavedColMajor{T} <: LayoutBase{T} end
 
-@inline fragtype(::Type{InterleavedColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+@inline fragtype(::InterleavedColMajor{T}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
 
 @inline function load(::Type{InterleavedColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
@@ -172,7 +201,7 @@ end
 
 struct InterleavedRowMajor{T} <: LayoutBase{T} end
 
-@inline fragtype(::Type{InterleavedRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+@inline fragtype(::InterleavedRowMajor{T}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
 
 @inline function load(::Type{InterleavedRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
@@ -204,12 +233,12 @@ end
 
 struct SplitColMajor{T} <: LayoutBase{T} end
 
-@inline function physical_size(::Type{SplitColMajor{T}}, logical_size::NamedTuple) where {T}
+@inline function physical_size(::SplitColMajor{T}, logical_size::NamedTuple) where {T}
     t = Tuple(logical_size)
     return (t..., 2)
 end
 
-@inline fragtype(::Type{SplitColMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+@inline fragtype(::SplitColMajor{T}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
 
 @inline function load(::Type{SplitColMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
@@ -243,11 +272,11 @@ end
 
 struct SplitRowMajor{T} <: LayoutBase{T} end
 
-@inline function physical_size(::Type{Padded{SplitRowMajor{T}, P}}, logical_size::NamedTuple) where {T, P}
+@inline function physical_size(::Padded{SplitRowMajor{T}, P}, logical_size::NamedTuple) where {T, P}
     return (logical_size[2] + P, logical_size[1], 2)
 end
 
-@inline fragtype(::Type{SplitRowMajor{T}}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
+@inline fragtype(::SplitRowMajor{T}, tile_size::NamedTuple) where {T} = NTuple{tile_size[1] * tile_size[2], Complex{T}}
 
 @inline function load(::Type{SplitRowMajor{T}}, workspace, tile::Tile{size}) where {T, size}
     x = ntuple(i -> zero(Complex{T}), tile.size[1] * tile.size[2])
@@ -274,5 +303,46 @@ end
         end
     end
 end
+
+
+# struct BlockSparse{M,K,T} <: DynamicLayout{T}
+#     bitmap::CuMatrix{T}
+# end
+#
+# @inline eltype(::BlockSparse{M,K,T}) where {M,K,T} = T
+# @inline eltype(::Type{BlockSparse{M,K,T}}) where {M,K,T} = T
+#
+# @inline function load(::Type{BlockSparse{M,K,T}}, workspace, tile::Tile{size}) where {M,K,T, size}
+#     N = 16 ÷ sizeof(T)
+#
+#     linear_base = linearise(tile.base, Base.size(workspace))
+#     linear_offset = linearise(tile.offset, Base.size(workspace))
+#
+#     return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
+# end
+#
+# @inline function threadblock_condition(layout_a::BlockSparse{M,K,T}, layout_b, block_i, block_j, block_k, block_tile) where {M,K,T}
+#     layout_a.bitmap[block_i ÷ M , block_k ÷ K] == one(T)
+# end
+
+# struct BlockSparse{T,SP} <: StaticLayout{T}
+# end
+#
+# @inline eltype(::Type{BlockSparse{T,SP}}) where {T,SP} = T
+# @inline eltype(::BlockSparse{T,SP}) where {T,SP} = T
+#
+# @inline function load(::Type{BlockSparse{T,SP}}, workspace, tile::Tile{size}) where {T, SP, size}
+#     N = 16 ÷ sizeof(T)
+#
+#     linear_base = linearise(tile.base, Base.size(workspace))
+#     linear_offset = linearise(tile.offset, Base.size(workspace))
+#
+#     return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
+# end
+#
+# @inline function threadblock_condition(layout_a::BlockSparse{T,SP}, layout_b, block_i, block_j, block_k, block_tile) where {T,SP} 
+#     # a = MArray{Tuple{1}, Layout.fragtype(GLOBAL_B_LAYOUT, MEM_B_THREAD)}(undef)
+#     rand() > SP
+# end
 
 end

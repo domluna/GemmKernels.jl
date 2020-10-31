@@ -4,6 +4,7 @@ module Epilogue
 using CUDA
 using GemmKernels
 using GemmKernels.Tiling
+# using KernelAbstractions.Extras: @unroll
 using GPUifyLoops: @unroll
 
 # ----------------
@@ -31,6 +32,8 @@ struct Default end
             Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
+
+    return nothing
 end
 
 # -------------
@@ -71,6 +74,8 @@ end
             Layout.store!(conf.global_d_layout, d, x, translate_base(thread_tile, (M = block_i, N = block_j)))
         end
     end
+
+    return nothing
 end
 
 end

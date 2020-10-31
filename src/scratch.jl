@@ -55,9 +55,11 @@
 #   so we need 16 blocks to perform this computation at full capacity
 #
 #
-using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling, KernelAbstractions
+using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
+# using KernelAbstractions
 # using KernelAbstractions.Extras: @unroll
-using GPUifyLoops: @unroll
+# using GPUifyLoops: @unroll
+using StaticArrays
 
 CUDA.math_mode!(CUDA.FAST_MATH; precision=:Float16)
 
@@ -74,10 +76,17 @@ b = CuArray{Float16}(rand(K, N));
 c = CuArray{Float32}(zeros(M, N));
 d = similar(c);
 
+bm = Int(M / 128)
+bk = Int(K / 64)
+# bs = SMatrix{bm, bk}(CuArray{Float32}(rand(bm , bk) .> 0.99));
+bs = MMatrix{bm, bk}(Array{Float32}(rand(bm , bk) .> 0.99));
+
 conf = GemmKernels.get_config(
     gemm_shape = (M = M, N = N, K = K),
     operator = Operator.WMMAOp{16, 16, 16},
     global_a_layout = Layout.Diagonal{Float16}(),
+    # global_a_layout = Layout.BlockSparse{Float16,0.70}(),
+    # global_a_layout = Layout.BlockSparse(bs),
     global_b_layout = Layout.AlignedColMajor{Float16}(),
 
     global_c_layout = Layout.AlignedColMajor{Float32}(),
@@ -192,39 +201,23 @@ function divergence2(a, threads_in_block)
     return
 end
 
-# --------
-# BlockSparse
-# --------
-
-struct BlockSparse{T} <: Tiling.LayoutBase{T}
-    mask::CuArray{T,2}
-end
-
-@inline function load(::Type{BlockSparse{T}}, workspace, tile::Tile{size}) where {T, size}
-    N = 16 ÷ sizeof(T)
-
-    linear_base = linearise(tile.base, Base.size(workspace))
-    linear_offset = linearise(tile.offset, Base.size(workspace))
-
-    return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
-end
-
-@inline threadblock_condition(layout_a::Type{BlockSparse{T}}, layout_b, block_i, block_j, block_k, block_tile) where {T} = layout_a[ block_i / block_tile.size.M , block_k / block_tile.size.K] == one(T)
-
 
 sparsity = 0.99
-bs = CuArray{Float16}(rand(Int(M / 128), Int(K / 64)) .> sparsity)
+bm = Int(M / 128)
+bk = Int(K / 64)
+
+# bs = SMatrix{bm, bk}(Array{Float32}(rand(bm , bk) .> sparsity))
 
 conf = GemmKernels.get_config(
     gemm_shape = (M = M, N = N, K = K),
     operator = Operator.WMMAOp{16, 16, 16},
-    global_a_layout = Layout.BlockSparse{Float16}(bs),
-    global_b_layout = Layout.AlignedColMajor{Float16},
+    global_a_layout = Layout.BlockSparse{Float32}(bs),
+    global_b_layout = Layout.AlignedColMajor{Float16}(),
 
-    global_c_layout = Layout.AlignedColMajor{Float32},
-    global_d_layout = Layout.AlignedColMajor{Float32},
+    global_c_layout = Layout.AlignedColMajor{Float32}(),
+    global_d_layout = Layout.AlignedColMajor{Float32}(),
 
-    shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8},
+    shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8}(),
 
     is_a_col_major = true,
     is_b_col_major = true,
