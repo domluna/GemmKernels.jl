@@ -54,7 +54,31 @@
 #
 #   so we need 16 blocks to perform this computation at full capacity
 #
+#  Info:
+# │   gemm_shape = (M = 4096, N = 4096, K = 4096)
+# │   block_shape = (M = 128, N = 128, K = 64)
+# │   warps_per_block = 8
+# │   mem_a_warp = (M = 128, K = 2)
+# │   mem_a_thread = (M = 8, K = 1)
+# │   mem_b_warp = (K = 64, N = 4)
+# │   mem_b_thread = (K = 8, N = 1)
+# │   mem_cd_warp = (M = 128, N = 1)
+# │   mem_cd_thread = (M = 4, N = 1)
+# │   compute_warp = (M = 32, N = 64, K = 16)
+# └   op_shape = (M = 16, N = 16, K = 16)
 #
+# for this configuration the kernel is launched with 256 threads, since there's
+# 8 warps per block, all `*_warp` sizes product = 256
+#
+# What does this mean ???
+#
+# - `gemm_shape` is the shape of the matrix dimensions (A, B, C)
+# - `block_shape` is the block pieces for each dimension, each block
+# - `is operated on in parallel
+# - `*_warp` is the parallel workload for each warp. This based off the block_shape. For example: (M = 128, K = 2) means the work is split among (128/128) = 1 piece for the M dimension and (64/2) = 32 pieces for the K dimension. Note we have 8 warps per block so the this shows a bottleneck in processing pieces since we can only do 8 pieces at a time.
+# - `*_thread` is the parallel workload for each thread. This based off *_warp. For example: (M = 128, K = 1) means the work is split among (128/8) = 16 pieces of work for the M dimension and (2/1) = 2 pieces for the K dimension. Note we have 32 threads per warp, so all 8x1 pieces can be processed in parallel.
+
+
 using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
 # using KernelAbstractions
 # using KernelAbstractions.Extras: @unroll
@@ -76,17 +100,19 @@ b = CuArray{Float16}(rand(K, N));
 c = CuArray{Float32}(zeros(M, N));
 d = similar(c);
 
-bm = Int(M / 128)
-bk = Int(K / 64)
+# bm = Int(M / 128)
+# bk = Int(K / 64)
 # bs = SMatrix{bm, bk}(CuArray{Float32}(rand(bm , bk) .> 0.99));
-bs = MMatrix{bm, bk}(Array{Float32}(rand(bm , bk) .> 0.99));
+# bs = MMatrix{bm, bk}(Array{Float32}(rand(bm , bk) .> 0.99));
 
 conf = GemmKernels.get_config(
     gemm_shape = (M = M, N = N, K = K),
     operator = Operator.WMMAOp{16, 16, 16},
-    global_a_layout = Layout.Diagonal{Float16}(),
+    # global_a_layout = Layout.Diagonal{Float16}(),
     # global_a_layout = Layout.BlockSparse{Float16,0.70}(),
     # global_a_layout = Layout.BlockSparse(bs),
+
+    global_a_layout = Layout.AlignedColMajor{Float16}(),
     global_b_layout = Layout.AlignedColMajor{Float16}(),
 
     global_c_layout = Layout.AlignedColMajor{Float32}(),
