@@ -22,37 +22,40 @@
 # - https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/nvidia-ampere-architecture-whitepaper.pdf
 # - https://images.nvidia.com/content/volta-architecture/pdf/volta-architecture-whitepaper.pdf
 #
-# From Volta whitepaper:
+# Tensor Core:
 # 
-#  * Each tensor core operates on a 4x4 matrix and does $$D = A*B + C$$. A*B requires 64 operations
+#  * Each tensor core operates on a 4x4 matrix and does $$D = A*B + C$$ **per clock cycle**.
 #  * the CUDA API exposes this as a MMA op requiring a 16x16 matrix operated on by a warp
-#  * threads can be individually scheduled at the warp level, allowing for concurrency over all threads
+#
+# Threads:
+#  * threads can be individually scheduled at the warp level, allowing for concurrency over all threads note
 #
 # GTX 2070 specs:
 #
-#  * 288 tensor cores, 4 per processor (from Ampere whitepaper)?
-#  * 2304 cuda cores, 36 multiprocessors, 64 cores per processor
-#  * warp size 32
+#  * 2304 cuda cores, 36 multiprocessors, 64 cores per multiprocessor
+#  * 288 tensor cores, 8 per multiprocessor
+#  * 32 threads per warp
 #  * 1024 threads per multiprocessor/block. Each multiprocessor has a shared memory
 #  * 1024 / 32 = 32 warps per block
+#  * 1 core = 1 single precision calculation per cycle
 #
-#  threads and cores are not 1 to 1, threads are scheduled onto cores by the scheduler
+#  Threads and cores are not 1 to 1, threads are scheduled onto cores by the scheduler.
+#  While not correct, the task concurrency model is a good way to think about this.
+#  You can have many more tasks than cores active at a time, but only at most N number
+#  of tasks have work being done on them where N is the number of cores.
 #
-#  while probably not correct the goroutine model is good way to think about this
-#
-#  1 core = 1 single precision calculation per cycle
 #   
 # Example:
 # 
-#   512x512 matrix
+#   4096x4096 matrix
 #
 #   assuming Float32 (4 bytes)
 #
-#   512*512*4 = 1MB
+#   4096*4096*4 = 64MB
 #
-#   each block can have 65536 shared memory
+#   each block can have 65536 bytes of shared memory
 #
-#   so we need 16 blocks to perform this computation at full capacity
+#   so we need 1024 blocks to perform this computation at full capacity
 #
 #  Info:
 # │   gemm_shape = (M = 4096, N = 4096, K = 4096)
@@ -77,6 +80,10 @@
 # - `is operated on in parallel
 # - `*_warp` is the parallel workload for each warp. This based off the block_shape. For example: (M = 128, K = 2) means the work is split among (128/128) = 1 piece for the M dimension and (64/2) = 32 pieces for the K dimension. Note we have 8 warps per block so the this shows a bottleneck in processing pieces since we can only do 8 pieces at a time.
 # - `*_thread` is the parallel workload for each thread. This based off *_warp. For example: (M = 128, K = 1) means the work is split among (128/8) = 16 pieces of work for the M dimension and (2/1) = 2 pieces for the K dimension. Note we have 32 threads per warp, so all 8x1 pieces can be processed in parallel.
+# - `op_shape` reflects that the WMMA tensor core op API is for 16x16 matrices
+# - `compute_warp` is the parallel tensor core workload for each warp. Since WMMA uses 16x16 matrices for a warp this means each warp will perform: 32/16 = 2 pieces along M, 64/16 = 4 pieces along N, 16/16 = 1 pieces along K. This means there's going to be a bottleneck over the tensor cores since only 2 calls can be processed in parallel.
+#
+# Since each block has 8 tensor cores only 2 warps can operate in parallel. This is because each warp uses 4 tensors cores for a 16x16 matrix.
 
 
 using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
