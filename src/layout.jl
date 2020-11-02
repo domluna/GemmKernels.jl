@@ -305,24 +305,24 @@ end
 end
 
 
-# struct BlockSparse{M,K,T} <: DynamicLayout{T}
-#     bitmap::CuMatrix{T}
-# end
-#
-# @inline eltype(::BlockSparse{M,K,T}) where {M,K,T} = T
-# @inline eltype(::Type{BlockSparse{M,K,T}}) where {M,K,T} = T
-#
-# @inline function load(::Type{BlockSparse{M,K,T}}, workspace, tile::Tile{size}) where {M,K,T, size}
-#     N = 16 ÷ sizeof(T)
-#
-#     linear_base = linearise(tile.base, Base.size(workspace))
-#     linear_offset = linearise(tile.offset, Base.size(workspace))
-#
-#     return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
-# end
-#
+struct BlockSparse{T} <: DynamicLayout{T}
+    bitmap::CuMatrix{T}
+end
+
+@inline eltype(::BlockSparse{T}) where {T} = T
+@inline eltype(::Type{BlockSparse{T}}) where {T} = T
+
+@inline function load(::Type{BlockSparse{T}}, workspace, tile::Tile{size}) where {T, size}
+    N = 16 ÷ sizeof(T)
+
+    linear_base = linearise(tile.base, Base.size(workspace))
+    linear_offset = linearise(tile.offset, Base.size(workspace))
+
+    return vloada(Vec{N, T}, pointer(workspace), linear_base + linear_offset - 1)
+end
+
 # @inline function threadblock_condition(layout_a::BlockSparse{M,K,T}, layout_b, block_i, block_j, block_k, block_tile) where {M,K,T}
-#     layout_a.bitmap[block_i ÷ M , block_k ÷ K] == one(T)
+    # layout_a.bitmap[block_i ÷ M , block_k ÷ K] == one(T)
 # end
 
 # struct BlockSparse{T,SP} <: StaticLayout{T}

@@ -86,11 +86,11 @@
 # Since each block has 8 tensor cores only 2 warps can operate in parallel. This is because each warp uses 4 tensors cores for a 16x16 matrix.
 
 
-using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
 # using KernelAbstractions
 # using KernelAbstractions.Extras: @unroll
 # using GPUifyLoops: @unroll
-using StaticArrays
+# using StaticArrays
+using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
 
 CUDA.math_mode!(CUDA.FAST_MATH; precision=:Float16)
 
@@ -107,17 +107,13 @@ b = CuArray{Float16}(rand(K, N));
 c = CuArray{Float32}(zeros(M, N));
 d = similar(c);
 
-# bm = Int(M / 128)
-# bk = Int(K / 64)
-# bs = SMatrix{bm, bk}(CuArray{Float32}(rand(bm , bk) .> 0.99));
-# bs = MMatrix{bm, bk}(Array{Float32}(rand(bm , bk) .> 0.99));
+bm = Int(M / 128)
+bn = Int(N / 128)
+bs = (CuArray{Float32}(rand(bm, bn) .> 0.99));
 
 conf = GemmKernels.get_config(
     gemm_shape = (M = M, N = N, K = K),
     operator = Operator.WMMAOp{16, 16, 16},
-    # global_a_layout = Layout.Diagonal{Float16}(),
-    # global_a_layout = Layout.BlockSparse{Float16,0.70}(),
-    # global_a_layout = Layout.BlockSparse(bs),
 
     global_a_layout = Layout.AlignedColMajor{Float16}(),
     global_b_layout = Layout.AlignedColMajor{Float16}(),
@@ -125,11 +121,31 @@ conf = GemmKernels.get_config(
     global_c_layout = Layout.AlignedColMajor{Float32}(),
     global_d_layout = Layout.AlignedColMajor{Float32}(),
 
-    shared_a_layout = Layout.Padded{Layout.AlignedColMajor{Float16}, 8}(),
-
     is_a_col_major = true,
     is_b_col_major = true,
 );
+
+bm = CuArray{Float32}(ones(32,32));
+out = CuArray{Float32}(zeros(size(bm)));
+
+function blocksparse(bm, out)
+    block_m = blockIdx().x
+    block_n = blockIdx().y
+    t = Tile((M=1, N=1))
+
+    val = Layout.load(Layout.AlignedColMajor{Float32}, bm, translate_base(t, (M=block_m-1, N = block_n-1)))
+    # val = Layout.load(Layout.Padded{Layout.AlignedColMajor{Float32}, 8}, bm, translate_base(t, (M=block_m, N = block_n)))
+
+    # @CUDA.cuprintln("block $block_m, $block_n: $(val[1].value), $(val[2].value), $(val[3].value), $(val[4].value)")
+    @CUDA.cuprintln("block $block_m, $block_n: $(val[1].value)")
+
+    # this isn't value the right value unless it's NTuple{1,VecElement{Float32}}
+    if val[1].value == 1
+        out[block_m, block_n] = 55.2
+    end
+
+    return nothing
+end
 
 struct WMMACall{M,N,K,T<:Union{Float16,Float32}}
 end
@@ -151,6 +167,7 @@ function wmma_kernel(a, b, c, d, conf)
     WMMA.store_d(pointer(d), d_frag, 16, WMMA.ColMajor, conf)
     return
 end
+
 
 
 function divergence1(a, threads_in_block)
