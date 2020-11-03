@@ -102,7 +102,7 @@ K = 4096
 # B is KxN
 # C, D are MxN
 a_cpu = Float16.(rand(M, K));
-a = CuArray{Float16}(Diagonal(a_cpu));
+a = CuArray{Float16}(a_cpu);
 b = CuArray{Float16}(rand(K, N));
 c = CuArray{Float32}(zeros(M, N));
 d = similar(c);
@@ -154,15 +154,26 @@ function mma(::WMMACall{M,N,K,T}, a, b, c, d) where {M, N, K, T}
     wmma_kernel(a, b, c, d, WMMA.Config{M,N,K,T})
 end
 
-function wmma_kernel(a, b, c, d, conf)
+function wmma_kernel(a, b, c, d)
     # x = threadIdx().x    # this example only requires linear indexing, so just use `x`
     # y = threadIdx().y    # this example only requires linear indexing, so just use `x`
     # stridex = blockIdx().x
     # stridey = blockIdx().y
     # @CUDA.cuprintln("thread $x, $y, block $stridex, $stridey")
+    conf = WMMA.Config{16,16,16,Float32}
     a_frag = WMMA.load_a(pointer(a), 16, WMMA.ColMajor, conf)
     b_frag = WMMA.load_b(pointer(b), 16, WMMA.ColMajor, conf)
     c_frag = WMMA.load_c(pointer(c), 16, WMMA.ColMajor, conf)
+    d_frag = WMMA.mma(a_frag, b_frag, c_frag, conf)
+    WMMA.store_d(pointer(d), d_frag, 16, WMMA.ColMajor, conf)
+    return
+end
+
+function wmma_kernel(a, b, d)
+    conf = WMMA.Config{16,16,16,Float32}
+    a_frag = WMMA.load_a(pointer(a), 16, WMMA.ColMajor, conf)
+    b_frag = WMMA.load_b(pointer(b), 16, WMMA.ColMajor, conf)
+    c_frag = WMMA.fill_c(Float32(0), conf)
     d_frag = WMMA.mma(a_frag, b_frag, c_frag, conf)
     WMMA.store_d(pointer(d), d_frag, 16, WMMA.ColMajor, conf)
     return
