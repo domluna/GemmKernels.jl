@@ -95,6 +95,8 @@ using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
 CUDA.math_mode!(CUDA.FAST_MATH; precision=:Float16)
 
 M, N, K = 4096, 4096, 4096
+# M, N, K = 8192, 8192, 8192
+# M, N, K = 1024, 1024, 1024
 
 # A is MxK
 # B is KxN
@@ -116,6 +118,9 @@ conf = GemmKernels.get_config(
 
     is_a_col_major = true,
     is_b_col_major = true,
+
+    gemm_shape = (M = 32, N = 32, K = 16),
+    warps_per_blocks=16,
 );
 
 bm = CuArray{Float32}(ones(32,32));
