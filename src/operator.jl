@@ -61,11 +61,6 @@ for (layout_type, wmma_layout_type, convert_index_func) in [
             return WMMA.load_c(ptr, size(workspace, 1), $wmma_layout_type, conf)
         end
 
-        @inline function fill_c(::Type{WMMAOp{M, N, K}}, value::Float32) where {M, N, K}
-            conf = WMMA.Config{M, N, K, Float32}
-
-            return WMMA.fill_c(value, conf)
-        end
 
         @inline function store_d(::Type{WMMAOp{M, N, K}}, ::Type{$layout_type{Float32}}, workspace, frag, tile::Tile) where {M, N, K}
             conf = WMMA.Config{M, N, K, Float32}
@@ -82,6 +77,12 @@ end
 function mma(::Type{WMMAOp{M, N, K}}, a_frag, b_frag, c_frag) where {M, N, K}
     conf = WMMA.Config{M, N, K, Float32}
     return WMMA.mma(a_frag, b_frag, c_frag, conf)
+end
+
+@inline function fill_c(::Type{WMMAOp{M, N, K}}, value::Float32) where {M, N, K}
+    conf = WMMA.Config{M, N, K, Float32}
+
+    return WMMA.fill_c(value, conf)
 end
 
 # -----------

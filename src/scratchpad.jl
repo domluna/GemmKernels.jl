@@ -94,7 +94,7 @@ using CUDA, LinearAlgebra, GemmKernels, GemmKernels.Tiling
 
 CUDA.math_mode!(CUDA.FAST_MATH; precision=:Float16)
 
-M, N, K = 512, 512, 512
+M, N, K = 4096, 4096, 4096
 
 # A is MxK
 # B is KxN

@@ -293,6 +293,8 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
                                     length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
     d_frags = MArray{Tuple{NUM_FRAGMENTS_M, NUM_FRAGMENTS_N}, Operator.fragtype_accum(OPERATOR, SHARED_D_LAYOUT)}(undef)
+    a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
+    b_frags = MArray{Tuple{NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
 
     @unroll for block_k = 0 : block_tile.size.K : gemm_sz.size.K - 1
         if Layout.threadblock_condition(conf.global_a_layout, GLOBAL_B_LAYOUT, block_i, block_j, block_k, block_tile)
@@ -319,7 +321,6 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
             # (3.3) Calculate a COMPUTE_WARP.M x COMPUTE_WARP.N tile of D, using a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K operation
             @unroll for warp_tile = parallellise(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
                 # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
-                a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
 
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))
@@ -327,7 +328,6 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
                 end
 
                 # (3.3.2) Load a COMPUTE_WARP.K x COMPUTE_WARP.N tile of B from shared memory into registers
-                b_frags = MArray{Tuple{NUM_FRAGMENTS_N}, Operator.fragtype_b(OPERATOR, SHARED_B_LAYOUT)}(undef)
 
                 @unroll for j = 1 : NUM_FRAGMENTS_N
                     b_tile = translate_offset(warp_tile.KN, (K = 0, N = (j-1)*COMPUTE_OP_SHAPE.N))
