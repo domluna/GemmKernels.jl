@@ -77,7 +77,7 @@ function matmul_blocksparse_D(a, b, d, bitmap_d, conf;
     end
 end
 
-function matmul_blocksparse_AB(a, b, d, bitmap_d, conf;
+function matmul_blocksparse_B(a, b, d, bitmap_b, conf;
                 transform_global_to_shared_a = Transform.Elementwise(),
                 transform_global_to_shared_b = Transform.Elementwise(),
                 transform_shared_to_global_d = Transform.Elementwise(),
@@ -86,7 +86,7 @@ function matmul_blocksparse_AB(a, b, d, bitmap_d, conf;
                 transform_regs_to_shared_d = Transform.Elementwise(),
                 epilogue = Epilogue.Default())
 
-    args = [a, b, d, bitmap_d,
+    args = [a, b, d, bitmap_b,
             transform_global_to_shared_a, transform_global_to_shared_b, transform_shared_to_global_d,
             transform_shared_to_regs_a, transform_shared_to_regs_b, transform_regs_to_shared_d,
             epilogue,
@@ -95,7 +95,7 @@ function matmul_blocksparse_AB(a, b, d, bitmap_d, conf;
     GC.@preserve args begin
         kernel_args = cudaconvert.(args)
         kernel_tt = Tuple{Core.Typeof.(kernel_args)...}
-        kernel = cufunction(Kernel.matmul_blocksparse_ab, kernel_tt; )
+        kernel = cufunction(Kernel.matmul_blocksparse_b, kernel_tt; )
         attributes(kernel.fun)[CUDA.FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES] = 64 * 1024
         kernel(kernel_args...; conf.launch_args...)
     end

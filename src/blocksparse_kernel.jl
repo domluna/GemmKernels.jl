@@ -263,7 +263,7 @@ B is size KxN and blocksparse
 
 D is size MxN
 """
-function matmul_blocksparse_ab(a, b, d, bitmap_b,
+function matmul_blocksparse_b(a, b, d, bitmap_b,
                           transf_gl2sh_a, transf_gl2sh_b, transf_sh2gl_d,
                           transf_sh2rf_a, transf_sh2rf_b, transf_rf2sh_d,
                           epilogue,
@@ -271,14 +271,12 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
     # Calculate the number of fragments needed to fully cover a warp tile
     NUM_FRAGMENTS_M = COMPUTE_WARP.M ÷ COMPUTE_OP_SHAPE.M
     NUM_FRAGMENTS_N = COMPUTE_WARP.N ÷ COMPUTE_OP_SHAPE.N
-    # NUM_FRAGMENTS_M = (MATMUL_SHAPE.M ÷ size(bitmap_b, 1)) ÷ COMPUTE_OP_SHAPE.M
-    # NUM_FRAGMENTS_N = (MATMUL_SHAPE.N ÷ size(bitmap_b, 2)) ÷ COMPUTE_OP_SHAPE.N
 
     # Constants
-    block_x = blockIdx().x - 1
-    block_y = blockIdx().y - 1
-    block_i = (block_x) * BLOCK_SHAPE.M
-    block_j = (block_y) * BLOCK_SHAPE.N
+    block_m = blockIdx().x - 1
+    block_n = blockIdx().y - 1
+    block_i = (block_m) * BLOCK_SHAPE.M
+    block_j = (block_n) * BLOCK_SHAPE.N
 
     thread_x = threadIdx().x
     warpId = (thread_x - 1) ÷ 32 + 1
@@ -287,10 +285,13 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
     gemm_sz = Tile(MATMUL_SHAPE)
     block_tile = Tile(BLOCK_SHAPE)
 
+    blocksparse_size_k = size(bitmap_b, 1)
+
     # (3) Compute a BLOCK_SHAPE.M x BLOCK_SHAPE.N x BLOCK_SHAPE.K matrix product within one threadblock
     shmem_a = @cuDynamicSharedMem(Layout.eltype(conf.shared_a_layout), Layout.physical_size(conf.shared_a_layout, block_tile.MK.size))
-    shmem_b = @cuDynamicSharedMem(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size),
-                                    length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
+    shmem_b = @cuDynamicSharedMem(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size), length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
+
+    shmem_b = @cuDynamicSharedMem(Layout.eltype(conf.shared_b_layout), Layout.physical_size(conf.shared_b_layout, block_tile.KN.size), length(shmem_a) * sizeof(Layout.eltype(conf.shared_a_layout)))
 
     d_frags = MArray{Tuple{NUM_FRAGMENTS_M, NUM_FRAGMENTS_N}, Operator.fragtype_accum(OPERATOR, SHARED_D_LAYOUT)}(undef)
     a_frags = MArray{Tuple{NUM_FRAGMENTS_M}, Operator.fragtype_a(OPERATOR, SHARED_A_LAYOUT)}(undef)
@@ -321,6 +322,17 @@ function matmul_blocksparse_ab(a, b, d, bitmap_b,
             # (3.3) Calculate a COMPUTE_WARP.M x COMPUTE_WARP.N tile of D, using a COMPUTE_WARP.M x COMPUTE_WARP.N x COMPUTE_WARP.K operation
             @unroll for warp_tile = parallellise(block_tile, Tile(COMPUTE_WARP), warpId, WARPS_PER_BLOCK)
                 # (3.3.1) Load a COMPUTE_WARP.M x COMPUTE_WARP.K tile of A from shared memory into registers
+                # tile_base = linearise(warp_tile.KN.base, block_tile.KN.size)
+                # tile_offset = linearise(warp_tile.KN.offset, block_tile.KN.size) - 1
+                # tile_idx = tile_base + tile_offset
+
+                # global base
+                # n_idx = Int(floor((block_j + 0) / gemm_sz.size.N) * blocksparse_size_k)
+                # # global offset
+                # k_idx = Int(floor((block_k + 0) / gemm_sz.size.K) * blocksparse_size_k) + 1
+
+                # bmval = Layout.vloada(Layout.Vec{1, Layout.eltype(GLOBAL_D_LAYOUT)}, pointer(bitmap_b), 1)
+                # bmval[1].value == 1 || continue
 
                 @unroll for i = 1 : NUM_FRAGMENTS_M
                     a_tile = translate_offset(warp_tile.MK, (M = (i-1)*COMPUTE_OP_SHAPE.M, K = 0))

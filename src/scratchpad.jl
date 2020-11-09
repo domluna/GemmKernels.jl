@@ -84,7 +84,7 @@
 # - `compute_warp` is the parallel tensor core workload for each warp. Since WMMA uses 16x16 matrices for a warp this means each warp will perform: 32/16 = 2 pieces along M, 64/16 = 4 pieces along N, 16/16 = 1 pieces along K. This means there's going to be a bottleneck over the tensor cores since only 2 calls can be processed in parallel.
 #
 # Since each block has 8 tensor cores only 2 warps can operate in parallel. This is because each warp uses 4 tensors cores for a 16x16 matrix.
-
+# to iterate over the K dimension, you need block_shape.M * block_shape.N == compute_warp.M * compute_warp.N * warps_per_block
 
 # using KernelAbstractions
 # using KernelAbstractions.Extras: @unroll
@@ -119,7 +119,7 @@ conf = GemmKernels.get_config(
     is_a_col_major = true,
     is_b_col_major = true,
 
-    gemm_shape = (M = 32, N = 32, K = 16),
+    compute_warp = (M = 32, N = 32, K = 16),
     warps_per_blocks=16,
 );
 
